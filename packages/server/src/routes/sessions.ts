@@ -2335,6 +2335,7 @@ export function createSessionsRoutes(deps: SessionsDeps): Hono {
     const { sessionId, providerName, request } = input;
     const saved = deps.sessionMetadataService;
     const metadata = saved?.getMetadata?.(sessionId);
+    const recoverTranscriptLaunchSettings = request.model === undefined;
     const requestedModel = request.model ?? saved?.getRequestedModel(sessionId);
     const model =
       requestedModel && requestedModel !== "default"
@@ -2363,6 +2364,7 @@ export function createSessionsRoutes(deps: SessionsDeps): Hono {
       settings: {
         model,
         requestedModel,
+        recoverTranscriptLaunchSettings,
         serviceTier: request.serviceTier,
         thinking: request.thinking,
         effort: request.effort,
@@ -5193,6 +5195,7 @@ export function createSessionsRoutes(deps: SessionsDeps): Hono {
       const coldSettings: ModelSettings = {
         model,
         requestedModel,
+        recoverTranscriptLaunchSettings: !hasModel,
         ...(hasServiceTier ? { serviceTier } : {}),
         ...thinkingOptions,
         providerName,

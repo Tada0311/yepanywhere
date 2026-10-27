@@ -92,6 +92,49 @@ describe("SessionActivationCoordinator", () => {
     await expect(state.waitForActivation("session-1")).resolves.toBe(false);
   });
 
+  it("prefers completed transcript settings when requested for resume recovery", async () => {
+    const state = coordinator({
+      sessionMetadataService: {
+        getEffectiveLaunchSettings: () => ({
+          permissionMode: "default",
+          requestedModel: "durable-model",
+          thinking: { type: "disabled" },
+        }),
+        getRequestedModel: () => "legacy-model",
+      } as unknown as NonNullable<
+        SessionActivationCoordinatorOptions["sessionMetadataService"]
+      >,
+      recoverSessionLaunchSettings: async () => ({
+        permissionMode: "bypassPermissions",
+        requestedModel: "transcript-model",
+        serviceTier: "priority",
+        thinking: { type: "adaptive", display: "summarized" },
+        effort: "high",
+      }),
+    });
+
+    await expect(
+      state.resolveColdLaunchSettings(
+        "project" as never,
+        "session-1",
+        undefined,
+        {
+          requestedModel: "stale-model",
+          recoverTranscriptLaunchSettings: true,
+        },
+      ),
+    ).resolves.toMatchObject({
+      permissionMode: "bypassPermissions",
+      modelSettings: {
+        requestedModel: "transcript-model",
+        model: "transcript-model",
+        serviceTier: "priority",
+        thinking: { type: "adaptive", display: "summarized" },
+        effort: "high",
+      },
+    });
+  });
+
   it("flushes the latest standing policy before reload and propagates write failures", async () => {
     const gate = deferred<void>();
     const writes: string[] = [];

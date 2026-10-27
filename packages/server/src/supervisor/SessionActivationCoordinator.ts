@@ -38,6 +38,8 @@ export interface ModelSettings {
   model?: string;
   /** Exact YA request token, including "default", used for durable restore. */
   requestedModel?: string;
+  /** Prefer completed transcript evidence over stale durable launch settings. */
+  recoverTranscriptLaunchSettings?: boolean;
   /** Provider-visible service tier. undefined means provider/default behavior. */
   serviceTier?: string;
   /** Thinking configuration. undefined = thinking disabled for new sessions. */
@@ -325,17 +327,22 @@ export class SessionActivationCoordinator {
   ): Promise<{ permissionMode: PermissionMode; modelSettings: ModelSettings }> {
     const metadata = this.options.sessionMetadataService;
     const durable = metadata?.getEffectiveLaunchSettings(sessionId);
-    const explicitRequestedModel =
-      modelSettings?.requestedModel ?? modelSettings?.model;
-    const legacyRequestedModel = durable
+    const recoverTranscriptLaunchSettings =
+      modelSettings?.recoverTranscriptLaunchSettings === true;
+    const explicitRequestedModel = recoverTranscriptLaunchSettings
       ? undefined
-      : metadata?.getRequestedModel(sessionId);
+      : (modelSettings?.requestedModel ?? modelSettings?.model);
+    const legacyRequestedModel =
+      durable || recoverTranscriptLaunchSettings
+        ? undefined
+        : metadata?.getRequestedModel(sessionId);
     const needsRecovery =
-      !durable &&
-      (permissionMode === undefined ||
-        (explicitRequestedModel === undefined &&
-          legacyRequestedModel === undefined) ||
-        modelSettings?.thinking === undefined);
+      recoverTranscriptLaunchSettings ||
+      (!durable &&
+        (permissionMode === undefined ||
+          (explicitRequestedModel === undefined &&
+            legacyRequestedModel === undefined) ||
+          modelSettings?.thinking === undefined));
     let recovered: RecoveredSessionLaunchSettings | undefined;
     if (needsRecovery && this.options.recoverSessionLaunchSettings) {
       const provider =
@@ -361,25 +368,38 @@ export class SessionActivationCoordinator {
       }
     }
 
-    const inheritedRequestedModel = durable
-      ? (durable.requestedModel ?? undefined)
-      : (legacyRequestedModel ?? recovered?.requestedModel);
+    const inheritedRequestedModel = recoverTranscriptLaunchSettings
+      ? recovered?.requestedModel
+      : durable
+        ? (durable.requestedModel ?? undefined)
+        : (legacyRequestedModel ?? recovered?.requestedModel);
     const requestedModel = explicitRequestedModel ?? inheritedRequestedModel;
-    const inheritedServiceTier = durable
-      ? (durable.serviceTier ?? undefined)
-      : recovered?.serviceTier;
-    const inheritedThinking = durable
-      ? (durable.thinking ?? undefined)
-      : recovered?.thinking;
-    const inheritedEffort = durable
-      ? (durable.effort ?? undefined)
-      : recovered?.effort;
+    const inheritedServiceTier = recoverTranscriptLaunchSettings
+      ? recovered?.serviceTier
+      : durable
+        ? (durable.serviceTier ?? undefined)
+        : recovered?.serviceTier;
+    const inheritedThinking = recoverTranscriptLaunchSettings
+      ? recovered?.thinking
+      : durable
+        ? (durable.thinking ?? undefined)
+        : recovered?.thinking;
+    const inheritedEffort = recoverTranscriptLaunchSettings
+      ? recovered?.effort
+      : durable
+        ? (durable.effort ?? undefined)
+        : recovered?.effort;
+    const inheritedPermissionMode = recoverTranscriptLaunchSettings
+      ? recovered?.permissionMode
+      : durable
+        ? durable.permissionMode
+        : recovered?.permissionMode;
     const thinkingWasRequested = modelSettings?.thinking !== undefined;
 
     return {
       permissionMode:
         permissionMode ??
-        (durable ? durable.permissionMode : recovered?.permissionMode) ??
+        inheritedPermissionMode ??
         this.options.defaultPermissionMode,
       modelSettings: {
         ...modelSettings,
