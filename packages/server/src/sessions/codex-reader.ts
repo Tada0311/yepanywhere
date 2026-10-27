@@ -446,6 +446,7 @@ interface CodexSummaryState {
   metaEntry?: CodexSessionMetaEntry;
   firstTurnContext?: CodexTurnContextEntry;
   latestTurnContext?: CodexTurnContextEntry;
+  latestCompletedTurnContext?: CodexTurnContextEntry;
   firstEventUserTitle?: CodexSummaryTitleCandidate;
   firstLegacyResponseUserTitle?: CodexSummaryTitleCandidate;
   pendingResponseUser?: CodexUserResponseEntry;
@@ -864,7 +865,9 @@ export class CodexSessionReader implements ISessionReader {
         stats,
         "full",
       );
-      return recoverCodexLaunchSettings(read.state.latestTurnContext);
+      return recoverCodexLaunchSettings(
+        read.state.latestCompletedTurnContext ?? read.state.latestTurnContext,
+      );
     } catch {
       return null;
     }
@@ -2568,6 +2571,7 @@ export class CodexSessionReader implements ISessionReader {
 
       if (getCodexAsyncAgentMessageItem(entry)) {
         state.assistantMessageCount += 1;
+        state.latestCompletedTurnContext = state.latestTurnContext;
         return;
       }
 
@@ -2598,6 +2602,7 @@ export class CodexSessionReader implements ISessionReader {
 
     if (payload.role === "assistant") {
       state.assistantMessageCount += 1;
+      state.latestCompletedTurnContext = state.latestTurnContext;
       return;
     }
 
@@ -3142,9 +3147,10 @@ export class CodexSessionReader implements ISessionReader {
       ) {
         return "codex-oss";
       }
-      if (provider === "openai" || provider === "azure") {
-        return "codex";
-      }
+      // Every other explicitly configured provider is served through Codex
+      // app-server. In particular, do not classify a hosted non-OpenAI model
+      // as codex-oss based only on its name.
+      return "codex";
     }
 
     // fallback: check model name for known local models if provider not set

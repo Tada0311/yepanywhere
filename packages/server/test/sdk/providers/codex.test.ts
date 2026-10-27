@@ -16,6 +16,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +30,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { WebSocketServer } from "ws";
 import type { CodexPlanToolMode, ModelInfo } from "@yep-anywhere/shared";
 import { compileTranscriptProjection } from "@yep-anywhere/shared/transcript/compiler";
 import { getLogger } from "../../../src/logging/logger.js";
@@ -304,6 +306,32 @@ describe("CodexProvider", () => {
 
       try {
         await expect(loggedInProvider.getAuthStatus()).resolves.toEqual({
+          installed: true,
+          authenticated: true,
+          enabled: true,
+        });
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
+    it("recognizes an explicitly configured non-OpenAI provider", async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "codex-provider-auth-"));
+      const codexHome = join(tempDir, "codex-home");
+      mkdirSync(codexHome);
+      writeFileSync(
+        join(codexHome, "config.toml"),
+        'model_provider = "llmbox"\n',
+      );
+      const codexPath = createFakeCodexCommand(
+        tempDir,
+        "fake-codex-custom-provider",
+        "#!/usr/bin/env node\nif (process.argv[2] === 'login' && process.argv[3] === 'status') process.exit(1);",
+      );
+      const customProvider = new CodexProvider({ codexPath, codexHome });
+
+      try {
+        await expect(customProvider.getAuthStatus()).resolves.toEqual({
           installed: true,
           authenticated: true,
           enabled: true,
@@ -1052,6 +1080,200 @@ describe("CodexProvider", () => {
 });
 
 describe("CodexProvider app-server lifecycle", () => {
+  unixIt(
+    "bridges Codex app-server traffic over a configured Unix socket",
+    async () => {
+      const tempDir = mkdtempSync(join("/tmp", "codex-shared-socket-"));
+      const socketPath = join(tempDir, "app-server.sock");
+      const logPath = join(tempDir, "fake-codex-requests.jsonl");
+      const codexPath = createFakeCodexCommand(
+        tempDir,
+        "fake-codex-shared-socket",
+        buildFakeCodexPermissionAppServer(logPath),
+      );
+      const requests: Array<Record<string, unknown>> = [];
+      const server = createServer();
+      const webSocketServer = new WebSocketServer({ server });
+      webSocketServer.on("connection", (socket) => {
+        socket.on("message", (raw) => {
+          const message = JSON.parse(raw.toString()) as Record<string, unknown>;
+          requests.push(message);
+          if (message.id === undefined) return;
+          const respond = (result: unknown) => {
+            socket.send(
+              JSON.stringify({ jsonrpc: "2.0", id: message.id, result }),
+            );
+          };
+          const notify = (method: string, params: unknown) => {
+            socket.send(JSON.stringify({ jsonrpc: "2.0", method, params }));
+          };
+
+          switch (message.method) {
+            case "initialize":
+              respond({ userAgent: "shared-fake-codex" });
+              break;
+            case "model/list":
+              respond({
+                data: [
+                  {
+                    id: "gpt-5.4-mini",
+                    model: "gpt-5.4-mini",
+                    displayName: "Test model",
+                    isDefault: true,
+                    defaultReasoningEffort: "low",
+                    supportedReasoningEfforts: [
+                      { reasoningEffort: "low", description: "low" },
+                    ],
+                  },
+                ],
+                nextCursor: null,
+              });
+              break;
+            case "skills/list":
+              respond({ data: [] });
+              break;
+            case "thread/start":
+              respond({
+                thread: { id: "thread-shared" },
+                model: "gpt-5.4-mini",
+                reasoningEffort: "low",
+              });
+              break;
+            case "turn/start":
+              respond({
+                turn: {
+                  id: "turn-shared",
+                  status: "inProgress",
+                  error: null,
+                },
+              });
+              setImmediate(() => {
+                notify("item/completed", {
+                  threadId: "thread-shared",
+                  turnId: "turn-shared",
+                  item: {
+                    id: "message-shared",
+                    type: "agentMessage",
+                    text: "shared socket response",
+                  },
+                });
+                notify("turn/completed", {
+                  threadId: "thread-shared",
+                  turn: {
+                    id: "turn-shared",
+                    items: [],
+                    status: "completed",
+                    error: null,
+                  },
+                });
+              });
+              break;
+            default:
+              respond({});
+              break;
+          }
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socketPath, () => {
+          server.off("error", reject);
+          resolve();
+        });
+      });
+
+      const previous = {
+        socket: process.env.YEP_ANYWHERE_CODEX_APP_SERVER_SOCKET,
+        shared: process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER,
+      };
+      process.env.YEP_ANYWHERE_CODEX_APP_SERVER_SOCKET = socketPath;
+      process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER = "1";
+
+      let session: Awaited<ReturnType<CodexProvider["startSession"]>> | null =
+        null;
+      try {
+        session = await new CodexProvider({ codexPath }).startSession({
+          cwd: tempDir,
+          initialMessage: { text: "exercise shared socket" },
+        });
+        await consumeCodexTurn(session.iterator);
+
+        expect(requests.map((request) => request.method)).toEqual(
+          expect.arrayContaining(["initialize", "thread/start", "turn/start"]),
+        );
+        // The standalone fake process would create this log if the bridge
+        // silently fell back instead of using the configured socket.
+        expect(existsSync(logPath)).toBe(false);
+      } finally {
+        await session?.abort();
+        if (previous.socket === undefined) {
+          delete process.env.YEP_ANYWHERE_CODEX_APP_SERVER_SOCKET;
+        } else {
+          process.env.YEP_ANYWHERE_CODEX_APP_SERVER_SOCKET = previous.socket;
+        }
+        if (previous.shared === undefined) {
+          delete process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER;
+        } else {
+          process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER = previous.shared;
+        }
+        for (const client of webSocketServer.clients) client.terminate();
+        await Promise.all([
+          new Promise<void>((resolve) =>
+            webSocketServer.close(() => resolve()),
+          ),
+          new Promise<void>((resolve) => server.close(() => resolve())),
+        ]);
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("falls back to a standalone app-server when shared transport has no socket", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "codex-shared-fallback-"));
+    const codexHome = join(tempDir, "codex-home");
+    const daemonRoot = join(tempDir, "daemon-root");
+    mkdirSync(codexHome);
+    mkdirSync(daemonRoot);
+    const logPath = join(tempDir, "fake-codex-requests.jsonl");
+    const codexPath = createFakeCodexCommand(
+      tempDir,
+      "fake-codex-shared-fallback",
+      buildFakeCodexPermissionAppServer(logPath),
+    );
+    const previous = {
+      tmpDir: process.env.TMPDIR,
+      shared: process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER,
+    };
+    process.env.TMPDIR = daemonRoot;
+    process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER = "1";
+
+    const session = await new CodexProvider({
+      codexPath,
+      codexHome,
+    }).startSession({
+      cwd: tempDir,
+      initialMessage: { text: "exercise bridge fallback" },
+    });
+    try {
+      await consumeCodexTurn(session.iterator);
+      expect(
+        readFakeCodexRequests(logPath).some(
+          (request) => request.method === "thread/start",
+        ),
+      ).toBe(true);
+    } finally {
+      await session.abort();
+      if (previous.tmpDir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previous.tmpDir;
+      if (previous.shared === undefined) {
+        delete process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER;
+      } else {
+        process.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER = previous.shared;
+      }
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("wakes the idle session iterator when abort closes its input queue", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "codex-provider-abort-idle-"));
     const logPath = join(tempDir, "fake-codex-requests.jsonl");
@@ -5593,6 +5815,39 @@ describe("CodexProvider Event Normalization", () => {
         filePath: "src/example.ts",
       },
     });
+  });
+
+  it("does not emit assistant messages before agent content is complete", () => {
+    const provider = createTestProvider() as unknown as {
+      convertItemToSDKMessages: (
+        item: unknown,
+        sessionId: string,
+        turnId: string,
+        sourceEvent: "item/started" | "item/completed",
+      ) => Array<Record<string, unknown>>;
+    };
+    const item = {
+      id: "agent-message-1",
+      type: "agent_message",
+      text: "final text",
+    };
+
+    expect(
+      provider.convertItemToSDKMessages(
+        item,
+        "session-1",
+        "turn-1",
+        "item/started",
+      ),
+    ).toEqual([]);
+    expect(
+      provider.convertItemToSDKMessages(
+        item,
+        "session-1",
+        "turn-1",
+        "item/completed",
+      ),
+    ).toHaveLength(1);
   });
 
   it("normalizes shell-launcher wrapped command execution to Read shape", () => {

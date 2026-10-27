@@ -329,6 +329,18 @@ describe("CodexSessionReader - OSS Support", () => {
     expect(session?.data.provider).toBe("codex-oss");
   });
 
+  it("keeps configured hosted non-OpenAI providers on codex app-server", async () => {
+    const sessionId = "hosted-custom-provider";
+    await createSessionFile(sessionId, "llmbox", "deepseek-v4.1");
+
+    const summary = await reader.getSessionSummary(
+      sessionId,
+      "test-project" as UrlProjectId,
+    );
+
+    expect(summary?.provider).toBe("codex");
+  });
+
   it("does not retain full entries for summary-only reads", async () => {
     const sessionId = "summary-cache-session";
     await createSessionFile(sessionId, "openai", "gpt-5");
@@ -641,6 +653,53 @@ describe("CodexSessionReader - OSS Support", () => {
       sourceBytes: 0,
       partialLineBytes: 0,
     });
+  });
+
+  it("prefers the turn context of the latest completed response", async () => {
+    const sessionId = "recovered-completed-launch-settings";
+    const now = new Date().toISOString();
+    const entry = (type: string, payload: object) =>
+      JSON.stringify({ type, timestamp: now, payload });
+    const lines = [
+      entry("session_meta", {
+        id: sessionId,
+        cwd: "/test/project",
+        timestamp: now,
+        model_provider: "openai",
+      }),
+      entry("turn_context", {
+        cwd: "/test/project",
+        approval_policy: "never",
+        sandbox_policy: { type: "danger-full-access" },
+        model: "gpt-5.4",
+        effort: "high",
+      }),
+      entry("response_item", {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "completed response" }],
+      }),
+      entry("turn_context", {
+        cwd: "/test/project",
+        approval_policy: "on-request",
+        sandbox_policy: { type: "read-only" },
+        model: "gpt-5.6-sol",
+        effort: "xhigh",
+      }),
+    ];
+    await writeFile(
+      join(testDir, `${sessionId}.jsonl`),
+      `${lines.join("\n")}\n`,
+    );
+
+    await expect(reader.getRecoveredLaunchSettings(sessionId)).resolves.toEqual(
+      {
+        permissionMode: "bypassPermissions",
+        requestedModel: "gpt-5.4",
+        thinking: { type: "adaptive", display: "summarized" },
+        effort: "high",
+      },
+    );
   });
 
   it.each([

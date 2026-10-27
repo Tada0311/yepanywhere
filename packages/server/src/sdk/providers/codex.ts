@@ -24,6 +24,7 @@ import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CODEX_TOOL_CORRELATION_FIELD,
   type CodexAsyncUserInputQuestion,
@@ -241,6 +242,27 @@ const log = {
   },
 };
 const CODEX_DESKTOP_BROWSER_SKILL_NAME = "browser:control-in-app-browser";
+
+async function usesConfiguredNonOpenAiProvider(
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const configPath = join(
+    env.CODEX_HOME ?? join(homedir(), ".codex"),
+    "config.toml",
+  );
+  try {
+    const config = await readFile(configPath, "utf8");
+    const configured = config.match(
+      /^\s*model_provider\s*=\s*["']([^"']+)["']/m,
+    )?.[1];
+    return Boolean(configured && configured !== "openai");
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
 
 function formatCodexGoalStatus(
   status: ThreadGoalSetResponse["goal"]["status"],
@@ -1086,33 +1108,37 @@ class CodexAppServerClient {
       throw new Error("Codex app-server already connected");
     }
 
-    const commandArgs = [
+    const codexArgs = [
       "app-server",
       "--listen",
       "stdio://",
       ...this.launchArguments,
     ];
-    const sandboxed = this.sessionSandbox?.wrapSpawn(
-      this.command,
-      commandArgs,
-      this.env,
+    const useSharedAppServer =
+      this.env.YEP_ANYWHERE_CODEX_SHARED_APP_SERVER === "1";
+    const bridgePath = fileURLToPath(
+      new URL("./codex-app-server-unix-bridge.mjs", import.meta.url),
     );
+    const spawnedCommand = useSharedAppServer ? process.execPath : this.command;
+    const commandArgs = useSharedAppServer
+      ? [bridgePath, this.command, ...codexArgs]
+      : codexArgs;
+    const sandboxed = useSharedAppServer
+      ? null
+      : this.sessionSandbox?.wrapSpawn(this.command, commandArgs, this.env);
     const child = (() => {
       try {
-        return spawn(
-          sandboxed?.command ?? this.command,
-          sandboxed?.args ?? commandArgs,
-          {
-            cwd: sandboxed?.cwd ?? this.cwd,
-            detached: process.platform !== "win32",
-            stdio: sandboxed?.stdio ?? ["pipe", "pipe", "pipe"],
-            env: sandboxed?.env ?? this.env,
-            shell: sandboxed
-              ? false
-              : process.platform === "win32" &&
-                !this.command.toLowerCase().endsWith(".exe"),
-          },
-        );
+        const executable = sandboxed?.command ?? spawnedCommand;
+        return spawn(executable, sandboxed?.args ?? commandArgs, {
+          cwd: sandboxed?.cwd ?? this.cwd,
+          detached: process.platform !== "win32",
+          stdio: sandboxed?.stdio ?? ["pipe", "pipe", "pipe"],
+          env: sandboxed?.env ?? this.env,
+          shell: sandboxed
+            ? false
+            : process.platform === "win32" &&
+              !executable.toLowerCase().endsWith(".exe"),
+        });
       } finally {
         sandboxed?.release();
       }
@@ -1553,9 +1579,12 @@ export class CodexProvider implements AgentProvider {
           codexEnv[name]?.trim(),
         ),
     );
+    const hasConfiguredProviderAuth =
+      await usesConfiguredNonOpenAiProvider(codexEnv);
     const authenticated = Boolean(
       codexPath &&
         (hasEnvironmentAuth ||
+          hasConfiguredProviderAuth ||
           (await isCodexCliAuthenticated(
             codexPath,
             codexEnv,
@@ -7406,6 +7435,10 @@ export class CodexProvider implements AgentProvider {
       }
 
       case "agent_message": {
+        // item/started announces the provider item before text exists. Deltas
+        // stream the content and item/completed carries the final persisted
+        // message; retaining the empty start would suppress that completion.
+        if (!isComplete) return [];
         const message = withCodexTimestamp(
           {
             type: "assistant",

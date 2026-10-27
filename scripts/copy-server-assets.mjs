@@ -54,6 +54,11 @@ copyFileSync(
 );
 
 copyFileSync(
+  join(serverSourceDir, "sdk/providers/codex-app-server-unix-bridge.mjs"),
+  join(serverTargetDir, "sdk/providers/codex-app-server-unix-bridge.mjs"),
+);
+
+copyFileSync(
   join(serverSourceDir, "highlighting/highlight-worker.mjs"),
   join(serverTargetDir, "highlighting/highlight-worker.mjs"),
 );
