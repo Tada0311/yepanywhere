@@ -11,7 +11,7 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
+import { StringDecoder } from "node:string_decoder";
 import { SourceVersionedSingleFlight } from "../lib/sourceVersionedSingleFlight.js";
 import type { ProviderCatalogFamily } from "../sessions/provider-catalog-family.js";
 import {
@@ -272,7 +272,20 @@ class GenerationWriter {
     const payload = Buffer.concat(stats.pending);
     stats.pending.length = 0;
     stats.pendingBytes = 0;
-    await handle.write(payload);
+    let offset = 0;
+    while (offset < payload.byteLength) {
+      const { bytesWritten } = await handle.write(
+        payload,
+        offset,
+        payload.byteLength - offset,
+      );
+      if (bytesWritten === 0) {
+        throw new Error(
+          `short write while writing session catalog shard (bucket ${bucket})`,
+        );
+      }
+      offset += bytesWritten;
+    }
   }
 }
 
@@ -1374,27 +1387,51 @@ async function readProjectRowsFromShard(
 class SessionCatalogCorruptionError extends Error {}
 
 async function* readShardRows(filePath: string): AsyncGenerator<ShardLine> {
-  const input = createReadStream(filePath, { encoding: "utf-8" });
-  const lines = createInterface({ input, crlfDelay: Number.POSITIVE_INFINITY });
+  // JSON supports U+2028/U+2029 in strings, but readline treats them as line
+  // boundaries. Shards are newline-delimited, so split only on "\n".
+  const input = createReadStream(filePath);
+  const decoder = new StringDecoder("utf8");
+  let buffer = "";
   let lineNumber = 0;
-  try {
-    for await (const line of lines) {
-      lineNumber += 1;
-      if (!line) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch (error) {
-        throw new SessionCatalogCorruptionError(
-          `Invalid session catalog row at ${filePath}:${lineNumber}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-      yield { row: parsed as SessionCatalogRow, line };
+
+  function* completeLines(): Generator<string> {
+    let newlineIndex = buffer.indexOf("\n");
+    while (newlineIndex !== -1) {
+      const line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      yield line;
+      newlineIndex = buffer.indexOf("\n");
     }
+  }
+
+  function parseLine(line: string): ShardLine {
+    lineNumber += 1;
+    if (line.endsWith("\r")) line = line.slice(0, -1);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (error) {
+      throw new SessionCatalogCorruptionError(
+        `Invalid session catalog row at ${filePath}:${lineNumber}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return { row: parsed as SessionCatalogRow, line };
+  }
+
+  try {
+    for await (const chunk of input) {
+      buffer +=
+        typeof chunk === "string" ? chunk : decoder.write(Buffer.from(chunk));
+      for (const line of completeLines()) {
+        if (line) yield parseLine(line);
+        else lineNumber += 1;
+      }
+    }
+    buffer += decoder.end();
+    if (buffer) yield parseLine(buffer);
   } finally {
-    lines.close();
     input.destroy();
   }
 }

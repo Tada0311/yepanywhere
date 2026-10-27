@@ -104,6 +104,21 @@ describe("SessionCatalogService", () => {
     );
   });
 
+  it("reads JSON strings containing Unicode line separators", async () => {
+    const service = createService();
+    await service.initialize();
+    const title = "before\u2028after\u2029done";
+    await service.reconcile([
+      adapter([row({ sessionId: "unicode-lines", project: "alpha", title })]),
+    ]);
+
+    const read = await service.readRows();
+
+    expect(read.rows).toHaveLength(1);
+    expect(read.rows[0]?.title).toBe(title);
+    expect(service.getMetrics().resetFailures).toBe(0);
+  });
+
   it("keeps a generation on disk while a whole-catalog read still walks it", async () => {
     // Retention of one plus many buckets: two publications during one read
     // would otherwise remove the directory the read started from.
