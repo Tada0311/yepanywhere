@@ -140,7 +140,7 @@ jobs:
           npm install \
             --global \
             --prefix "$prefix" \
-            "release-assets/yepanywhere-${{ steps.release.outputs.version }}.tgz"
+            "./release-assets/yepanywhere-${{ steps.release.outputs.version }}.tgz"
           "$prefix/bin/yepanywhere" --version
 
       - name: Publish GitHub Release
