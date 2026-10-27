@@ -5554,6 +5554,7 @@ export class Supervisor {
       `Session interrupt requested: ${process.sessionId}`,
     );
 
+    const providerSessionIdSettled = process.providerSessionIdSettled;
     const { interrupted, timedOut } =
       await this.interruptProcessWithTimeout(process);
     if (interrupted) {
@@ -5592,7 +5593,9 @@ export class Supervisor {
       process,
     );
     this.unregisterProcess(process);
-    this.recoverDeferredMessagesAfterHardAbort(process, deferredMessages);
+    if (providerSessionIdSettled) {
+      this.recoverDeferredMessagesAfterHardAbort(process, deferredMessages);
+    }
     return { success: false, supported: true, hardAborted: true };
   }
 
@@ -6261,6 +6264,7 @@ export class Supervisor {
   }
 
   private registerProcess(process: Process, isNewSession: boolean): void {
+    if (process.isTerminated) return;
     this.observeProcessEvents(process);
 
     const log = getLogger();

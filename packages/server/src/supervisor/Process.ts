@@ -5362,6 +5362,28 @@ export class Process {
           );
           return;
         }
+        if (
+          this.provider === "codex" &&
+          message.type === "error" &&
+          message.codexWillRetry === false &&
+          (message.codexErrorScope === "app_server_process" ||
+            !this.sessionIdResolved)
+        ) {
+          // A provider that never attached cannot consume its queued turn.
+          // Surface one finite failure instead of leaving a half-live owner.
+          this.transportFailed = true;
+          this.requestProviderAbortWithoutWaiting(
+            "Codex app-server startup failed",
+          );
+          await this.drainPendingUserMessages("promoted");
+          const error = new Error(
+            typeof message.error === "string" && message.error.trim()
+              ? message.error
+              : "Codex app-server failed before the thread was attached",
+          );
+          this.markTerminated("Codex app-server startup failed", error);
+          return;
+        }
 
         // Handle special message types
         const claudeSessionState = getClaudeSessionStateChange(message);

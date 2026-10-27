@@ -8346,6 +8346,7 @@ describe("Supervisor", () => {
         startSession: async () => ({
           iterator: controller.iterator,
           queue: new MessageQueue(),
+          initializedSessionId: "terminal-session",
           abort: () => {
             providerAlive = false;
             controller.finish();
@@ -8420,6 +8421,7 @@ describe("Supervisor", () => {
         startSession: async () => ({
           iterator: controller.iterator,
           queue: new MessageQueue(),
+          initializedSessionId: "terminal-session",
           abort: () => controller.finish(),
           isProcessAlive: () => true,
         }),
@@ -8465,6 +8467,60 @@ describe("Supervisor", () => {
       });
 
       controller.finish();
+    });
+
+    it("terminates a Codex process when app-server startup fails before init", async () => {
+      const controller = createControllableIterator();
+      let aborted = false;
+      const provider: AgentProvider = {
+        name: "codex",
+        displayName: "Codex",
+        supportsPermissionMode: true,
+        supportsThinkingToggle: true,
+        supportsSlashCommands: true,
+        isInstalled: async () => true,
+        isAuthenticated: async () => true,
+        getAuthStatus: async () => ({
+          installed: true,
+          authenticated: true,
+          enabled: true,
+        }),
+        getAvailableModels: async () => [],
+        startSession: async () => ({
+          iterator: controller.iterator,
+          queue: new MessageQueue(),
+          abort: () => {
+            aborted = true;
+            controller.finish();
+          },
+          isProcessAlive: () => true,
+        }),
+      };
+      const runtimeSupervisor = new Supervisor({ provider });
+
+      const process = await runtimeSupervisor.reactivateSession(
+        "/tmp/test",
+        "startup-failure-session",
+        undefined,
+        { providerName: "codex" },
+      );
+
+      controller.push({
+        type: "error",
+        uuid: "codex-startup-error",
+        session_id: "startup-failure-session",
+        error: "Provider session startup did not settle",
+        codexWillRetry: false,
+        codexErrorScope: "app_server_process",
+      });
+
+      await waitFor(() => {
+        expect(process.isTerminated).toBe(true);
+        expect(aborted).toBe(true);
+        expect(
+          runtimeSupervisor.getProcessForSession("startup-failure-session"),
+        ).toBeUndefined();
+      });
     });
   });
 });
