@@ -1,0 +1,157 @@
+name: Codex DevBox Release
+
+on:
+  push:
+    tags:
+      - 'codexdevbox-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codexdevbox-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.4'
+          cache: 'pnpm'
+
+      - name: Resolve release metadata
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          version="${tag#codexdevbox-v}"
+          if [ "$tag" = "$version" ]; then
+            echo "::error::Tag must start with codexdevbox-v"
+            exit 1
+          fi
+          node - "$version" "$tag" <<'NODE'
+          const [version, tag] = process.argv.slice(2);
+          if (
+            !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/.test(
+              version,
+            )
+          ) {
+            throw new Error(`invalid release version: ${version}`);
+          }
+          if (tag !== `codexdevbox-v${version}`) {
+            throw new Error(`invalid release tag: ${tag}`);
+          }
+          NODE
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "commit=$(git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared package
+        run: pnpm --filter @yep-anywhere/shared build
+
+      - name: Type-check server
+        run: pnpm --filter @yep-anywhere/server exec tsc --noEmit
+
+      - name: Test Codex compatibility boundaries
+        run: >-
+          pnpm --filter @yep-anywhere/server exec vitest run
+          test/services/SessionCatalogService.test.ts
+          test/sdk/providers/codex.test.ts
+          test/sessions/codex-reader-oss.test.ts
+          test/supervisor/sessionActivationCoordinator.test.ts
+          test/supervisor.test.ts
+
+      - name: Build release bundle
+        env:
+          NPM_VERSION: ${{ steps.release.outputs.version }}
+          NPM_REPOSITORY_URL: git+${{ github.server_url }}/${{ github.repository }}.git
+          NPM_HOMEPAGE_URL: ${{ github.server_url }}/${{ github.repository }}#readme
+          NPM_BUGS_URL: ${{ github.server_url }}/${{ github.repository }}/issues
+        run: pnpm build:bundle
+
+      - name: Pack release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          (
+            cd dist/npm-package
+            npm pack --pack-destination "$GITHUB_WORKSPACE/release-assets"
+          )
+          node scripts/codexdevbox-release.mjs \
+            --version "${{ steps.release.outputs.version }}" \
+            --tag "${{ steps.release.outputs.tag }}" \
+            --commit "${{ steps.release.outputs.commit }}" \
+            --tarball "release-assets/yepanywhere-${{ steps.release.outputs.version }}.tgz" \
+            --output release-assets \
+            --repository "${{ github.repository }}" \
+            --server-url "${{ github.server_url }}"
+
+      - name: Validate release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n release-assets/install-codexdevbox.sh
+          node --input-type=module - <<'NODE'
+          import assert from "node:assert/strict";
+          import { createHash } from "node:crypto";
+          import fs from "node:fs";
+
+          const dir = "release-assets";
+          const manifest = JSON.parse(
+            fs.readFileSync(`${dir}/release-manifest.json`, "utf8"),
+          );
+          const tarball = fs.readFileSync(`${dir}/${manifest.asset}`);
+          const sha256 = createHash("sha256").update(tarball).digest("hex");
+          assert.equal(sha256, manifest.sha256);
+          assert.equal(manifest.tag, `codexdevbox-v${manifest.version}`);
+          assert.match(manifest.gitCommit, /^[0-9a-f]{40}$/);
+          assert.match(manifest.nodeRuntimeVersion, /^\d+\.\d+\.\d+$/);
+          assert.ok(fs.existsSync(`${dir}/install-codexdevbox.sh`));
+          assert.ok(fs.existsSync(`${dir}/SHA256SUMS`));
+          assert.ok(fs.existsSync(`${dir}/release-notes.md`));
+          NODE
+
+      - name: Smoke-test packaged CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/codexdevbox-package-smoke"
+          npm install \
+            --global \
+            --prefix "$prefix" \
+            "release-assets/yepanywhere-${{ steps.release.outputs.version }}.tgz"
+          "$prefix/bin/yepanywhere" --version
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          name: Codex DevBox v${{ steps.release.outputs.version }}
+          body_path: release-assets/release-notes.md
+          files: |
+            release-assets/yepanywhere-${{ steps.release.outputs.version }}.tgz
+            release-assets/release-manifest.json
+            release-assets/install-codexdevbox.sh
+            release-assets/SHA256SUMS
+          draft: false
+          prerelease: false

@@ -38,6 +38,7 @@ coverage/
 # Test artifacts
 test-results/
 .playwright-artifacts-*/
+/release-assets/
 scripts/perf-suite/results/
 scripts/perf-suite/work/
 

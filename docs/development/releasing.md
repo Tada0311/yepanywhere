@@ -34,6 +34,42 @@ The CI workflow verifies the changelog contains an entry for the version being r
 
 The workflow runs lint, typecheck, and tests, then builds with `pnpm build:bundle` and publishes with `--provenance` for supply chain attestation. It also creates a GitHub Release with auto-generated notes.
 
+## Releasing the Codex DevBox fork
+
+The Codex DevBox fork publishes a prebuilt server bundle through GitHub Releases.
+Users do not select a branch, commit, source directory, or package version.
+
+From a clean fork commit with the intended compatibility changes:
+
+```bash
+VERSION=0.11.0-codexdevbox.1
+git tag "codexdevbox-v$VERSION"
+git push fork "codexdevbox-v$VERSION"
+```
+
+The tag workflow validates the Codex compatibility boundary, builds the bundle,
+and publishes these assets:
+
+- `yepanywhere-<version>.tgz`
+- `release-manifest.json`
+- `install-codexdevbox.sh`
+- `SHA256SUMS`
+
+The installer URL is stable across releases:
+
+```text
+https://github.com/Tada0311/yepanywhere/releases/latest/download/install-codexdevbox.sh
+```
+
+The downloaded installer embeds the resolved release URL. It verifies the
+archive checksum, installs under `$HOME/.local`, and writes the selected release,
+absolute CLI path, Node path, and npm path to
+`$HOME/.codexdevbox/install.json`. If the available Node.js does not satisfy the
+package runtime, the installer downloads a checksum-verified managed runtime and
+binds the stable `$HOME/.local/bin/yepanywhere` launcher to it. Automation should
+invoke that launcher and consume the state file instead of asking users for
+release metadata, runtime paths, source branches, commits, or a source directory.
+
 ## Releasing the Website
 
 The website (landing pages + remote relay client at `/remote`) is deployed to GitHub Pages separately from npm. **Pushing to main does NOT deploy the site** — it only runs CI (lint, typecheck, tests). The site only deploys when a `site-v*` tag is pushed (or via manual workflow_dispatch).

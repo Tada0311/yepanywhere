@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly RELEASE_BASE_URL="@@RELEASE_BASE_URL@@"
+readonly NODE_RUNTIME_VERSION="@@NODE_RUNTIME_VERSION@@"
+readonly NODE_RUNTIME_BASE_URL="https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}"
+readonly INSTALL_PREFIX="${CODEXDEVBOX_INSTALL_PREFIX:-$HOME/.local}"
+readonly STATE_DIR="${CODEXDEVBOX_STATE_DIR:-$HOME/.codexdevbox}"
+
+fail() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+case "$INSTALL_PREFIX" in
+  /*) ;;
+  *) fail "CODEXDEVBOX_INSTALL_PREFIX must be an absolute path" ;;
+esac
+
+command -v curl >/dev/null 2>&1 || fail "curl is required"
+command -v tar >/dev/null 2>&1 || fail "tar is required"
+
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/codexdevbox.XXXXXX")"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+download() {
+  curl \
+    --fail \
+    --location \
+    --proto '=https' \
+    --proto-redir '=https' \
+    --retry 3 \
+    --show-error \
+    --silent \
+    --tlsv1.2 \
+    "$1" \
+    --output "$2"
+}
+
+node_is_supported() {
+  [ -n "${1:-}" ] && [ -x "$1" ] && "$1" -e '
+    const [major, minor] = process.versions.node.split(".").map(Number);
+    process.exit(
+      (major === 22 && minor >= 16) ||
+      (major === 23 && minor >= 11) ||
+      (major === 24 && minor >= 10) ||
+      major > 24
+        ? 0
+        : 1,
+    );
+  ' >/dev/null 2>&1
+}
+
+install_managed_node() {
+  local platform
+  local archive_name
+  local archive_path
+  local sums_path
+  local expected_sha
+  local actual_sha
+  local runtime_root
+
+  case "$(uname -s):$(uname -m)" in
+    Darwin:arm64) platform="darwin-arm64" ;;
+    Darwin:x86_64) platform="darwin-x64" ;;
+    Linux:x86_64) platform="linux-x64" ;;
+    Linux:aarch64 | Linux:arm64) platform="linux-arm64" ;;
+    *)
+      fail "no managed Node.js runtime is available for $(uname -s) $(uname -m)"
+      ;;
+  esac
+
+  runtime_root="$STATE_DIR/node/v${NODE_RUNTIME_VERSION}-${platform}"
+  NODE_BIN="$runtime_root/bin/node"
+  if node_is_supported "$NODE_BIN"; then
+    return
+  fi
+
+  archive_name="node-v${NODE_RUNTIME_VERSION}-${platform}.tar.gz"
+  archive_path="$TMP_DIR/$archive_name"
+  sums_path="$TMP_DIR/SHASUMS256.txt"
+  printf 'Installing a compatible Node.js runtime (%s)...\n' "$NODE_RUNTIME_VERSION"
+  download "$NODE_RUNTIME_BASE_URL/$archive_name" "$archive_path"
+  download "$NODE_RUNTIME_BASE_URL/SHASUMS256.txt" "$sums_path"
+
+  expected_sha="$(
+    awk -v artifact="$archive_name" '$2 == artifact { print $1 }' "$sums_path"
+  )"
+  printf '%s' "$expected_sha" | grep -Eq '^[0-9a-f]{64}$' ||
+    fail "Node.js checksum is missing from the official manifest"
+  if command -v shasum >/dev/null 2>&1; then
+    actual_sha="$(shasum -a 256 "$archive_path" | awk '{ print $1 }')"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    actual_sha="$(sha256sum "$archive_path" | awk '{ print $1 }')"
+  else
+    fail "a SHA-256 tool is required to verify the Node.js runtime"
+  fi
+  [ "$actual_sha" = "$expected_sha" ] ||
+    fail "downloaded Node.js runtime checksum mismatch"
+
+  mkdir -p "$STATE_DIR" "$runtime_root"
+  chmod 700 "$STATE_DIR"
+  tar -xzf "$archive_path" -C "$runtime_root" --strip-components=1
+  node_is_supported "$NODE_BIN" || fail "managed Node.js runtime could not run"
+}
+
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+if ! node_is_supported "$NODE_BIN"; then
+  install_managed_node
+fi
+NODE_BIN="$(
+  "$NODE_BIN" -e 'process.stdout.write(require("node:fs").realpathSync(process.execPath))'
+)"
+
+NPM_BIN="${NPM_BIN:-$(dirname "$NODE_BIN")/npm}"
+if [ ! -x "$NPM_BIN" ]; then
+  NPM_BIN="$(command -v npm || true)"
+fi
+[ -x "$NPM_BIN" ] || fail "npm was not found"
+
+read_manifest() {
+  "$NODE_BIN" -e '
+    const fs = require("node:fs");
+    const [file, key] = process.argv.slice(1);
+    const value = JSON.parse(fs.readFileSync(file, "utf8"))[key];
+    if (typeof value !== "string" || value.length === 0) process.exit(1);
+    process.stdout.write(value);
+  ' "$MANIFEST_PATH" "$1"
+}
+
+MANIFEST_PATH="$TMP_DIR/release-manifest.json"
+download "$RELEASE_BASE_URL/release-manifest.json" "$MANIFEST_PATH"
+
+VERSION="$(read_manifest version)" || fail "release manifest is missing version"
+TAG="$(read_manifest tag)" || fail "release manifest is missing tag"
+ASSET_NAME="$(read_manifest asset)" || fail "release manifest is missing asset"
+EXPECTED_SHA="$(read_manifest sha256)" || fail "release manifest is missing sha256"
+
+printf '%s' "$ASSET_NAME" | grep -Eq '^[A-Za-z0-9._+-]+$' ||
+  fail "release manifest contains an invalid asset name"
+printf '%s' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{64}$' ||
+  fail "release manifest contains an invalid SHA-256"
+
+TARBALL_PATH="$TMP_DIR/$ASSET_NAME"
+download "$RELEASE_BASE_URL/$ASSET_NAME" "$TARBALL_PATH"
+
+ACTUAL_SHA="$(
+  "$NODE_BIN" -e '
+    const crypto = require("node:crypto");
+    const fs = require("node:fs");
+    process.stdout.write(
+      crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"),
+    );
+  ' "$TARBALL_PATH"
+)"
+[ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || fail "release asset checksum mismatch"
+
+mkdir -p "$INSTALL_PREFIX" "$STATE_DIR"
+chmod 700 "$STATE_DIR"
+
+NPM_CONFIG_PREFIX="$INSTALL_PREFIX" \
+NPM_CONFIG_CACHE="$STATE_DIR/npm-cache" \
+PATH="$(dirname "$NODE_BIN"):$PATH" \
+  "$NPM_BIN" install \
+  --global \
+  --no-audit \
+  --no-fund \
+  --loglevel=error \
+  "$TARBALL_PATH"
+
+YA_ENTRY="$INSTALL_PREFIX/lib/node_modules/yepanywhere/dist/cli.js"
+YA_CLI="$INSTALL_PREFIX/bin/yepanywhere"
+[ -f "$YA_ENTRY" ] || fail "installation completed without $YA_ENTRY"
+
+"$NODE_BIN" - "$YA_CLI" "$NODE_BIN" "$YA_ENTRY" <<'NODE'
+const fs = require("node:fs");
+const [launcherPath, nodeBin, entryPath] = process.argv.slice(2);
+const shellQuote = (value) => `'${value.replaceAll("'", "'\"'\"'")}'`;
+fs.rmSync(launcherPath, { force: true });
+fs.writeFileSync(
+  launcherPath,
+  `#!/bin/sh\nexec ${shellQuote(nodeBin)} ${shellQuote(entryPath)} "$@"\n`,
+  { mode: 0o755 },
+);
+NODE
+chmod 755 "$YA_CLI"
+
+INSTALLED_VERSION="$("$YA_CLI" --version)"
+case "$INSTALLED_VERSION" in
+  *"$VERSION"*) ;;
+  *) fail "installed CLI version does not match release: $INSTALLED_VERSION" ;;
+esac
+
+STATE_FILE="$STATE_DIR/install.json"
+"$NODE_BIN" - "$MANIFEST_PATH" "$STATE_FILE" \
+  "$INSTALL_PREFIX" "$NODE_BIN" "$NPM_BIN" "$YA_ENTRY" "$YA_CLI" <<'NODE'
+const fs = require("node:fs");
+const [
+  manifestPath,
+  statePath,
+  installPrefix,
+  nodeBin,
+  npmBin,
+  yaEntry,
+  yaCli,
+] = process.argv.slice(2);
+const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+const state = {
+  schemaVersion: 1,
+  installedAt: new Date().toISOString(),
+  installPrefix,
+  nodeBin,
+  npmBin,
+  yaEntry,
+  yaCli,
+  release: manifest,
+};
+fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, {
+  mode: 0o600,
+});
+NODE
+chmod 600 "$STATE_FILE"
+
+printf 'Installed Yep Anywhere Codex DevBox %s\n' "$VERSION"
+printf 'YA_CLI=%s\n' "$YA_CLI"
+printf 'NODE_BIN=%s\n' "$NODE_BIN"
+printf 'STATE_FILE=%s\n' "$STATE_FILE"

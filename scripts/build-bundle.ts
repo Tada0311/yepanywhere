@@ -32,6 +32,14 @@ const rootPackageJson = JSON.parse(fs.readFileSync(ROOT_PACKAGE_JSON, "utf-8"));
 // Version for npm package: CI passes the release tag via NPM_VERSION; local
 // runs use the repository's declared package version.
 const NPM_VERSION = process.env.NPM_VERSION || rootPackageJson.version;
+const NPM_REPOSITORY_URL =
+  process.env.NPM_REPOSITORY_URL ||
+  "git+https://github.com/kzahel/yepanywhere.git";
+const NPM_HOMEPAGE_URL =
+  process.env.NPM_HOMEPAGE_URL ||
+  "https://github.com/kzahel/yepanywhere#readme";
+const NPM_BUGS_URL =
+  process.env.NPM_BUGS_URL || "https://github.com/kzahel/yepanywhere/issues";
 
 interface StepResult {
   step: string;
@@ -276,11 +284,11 @@ step("Generate package.json for npm", () => {
     ),
     repository: {
       type: "git",
-      url: "git+https://github.com/kzahel/yepanywhere.git",
+      url: NPM_REPOSITORY_URL,
     },
-    homepage: "https://github.com/kzahel/yepanywhere#readme",
+    homepage: NPM_HOMEPAGE_URL,
     bugs: {
-      url: "https://github.com/kzahel/yepanywhere/issues",
+      url: NPM_BUGS_URL,
     },
     keywords: ["claude", "ai", "agent", "supervisor", "mobile"],
     license: "MIT",
