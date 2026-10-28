@@ -171,6 +171,42 @@ describe("CodexSessionReader - OSS Support", () => {
     );
   };
 
+  it("overlays Codex App thread names on summaries, lists, and details", async () => {
+    const sessionId = "native-title-session";
+    const projectId = "test-project" as UrlProjectId;
+    await createSessionFile(sessionId, "openai", "gpt-6-astra");
+    let nativeTitle: { title: string; fullTitle: string } | null = {
+      title: "Renamed in Codex App",
+      fullTitle: "Renamed in Codex App",
+    };
+    const titledReader = new CodexSessionReader({
+      sessionsDir: testDir,
+      titleResolver: {
+        getTitleOverride: () => nativeTitle,
+      },
+    });
+
+    const summary = await titledReader.getSessionSummary(sessionId, projectId);
+    const listSummary = await titledReader.getSessionListSummary(
+      sessionId,
+      projectId,
+    );
+    const detail = await titledReader.getSession(sessionId, projectId);
+    const raw = await titledReader.getSessionSummary(sessionId, projectId, {
+      deferNativeTitle: true,
+    });
+
+    expect(summary).toMatchObject(nativeTitle);
+    expect(listSummary).toMatchObject(nativeTitle);
+    expect(detail?.summary).toMatchObject(nativeTitle);
+    expect(raw?.title).toBe("Hello world");
+
+    nativeTitle = null;
+    const cleared = await titledReader.getSessionSummary(sessionId, projectId);
+    expect(cleared?.title).toBe("Hello world");
+    expect(cleared?.fullTitle).toBe("Hello world");
+  });
+
   it("discovers recent async questions without loading transcript history", async () => {
     const sessionId = "questions-without-open-transcript";
     await createSessionFile(sessionId, "openai", "gpt-6-astra");

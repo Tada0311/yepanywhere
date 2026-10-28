@@ -43,6 +43,7 @@ const REVALIDATE_EVENTS = [
   "refresh",
   "reconnect",
   "session-catalog-updated",
+  "session-updated",
   "recents-changed",
   "session-id-remapped",
   "projects-changed",

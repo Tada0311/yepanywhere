@@ -13,6 +13,7 @@ import {
   idleReapHoursToMs,
   isClaudeProviderName,
   parseSpeechVoiceBackends,
+  toUrlProjectId,
   unionSpeechVoiceBackends,
 } from "@yep-anywhere/shared";
 import { createApp } from "./app.js";
@@ -68,6 +69,7 @@ import {
 } from "./storage/discovery-sqlite.js";
 import { ProjectGlossarySubscriptionManager } from "./projects/projectGlossarySubscriptionManager.js";
 import { ProjectWorktreeSubscriptionManager } from "./projects/projectWorktreeSubscriptionManager.js";
+import { canonicalizeProjectPath } from "./projects/paths.js";
 import { projectPathCacheDiagnostics } from "./projects/projectPathIndex.js";
 import { ProjectStoragePolicy } from "./projects/projectStoragePolicy.js";
 import { PushService, getOrCreateVapidKeys } from "./push/index.js";
@@ -122,6 +124,7 @@ import {
 } from "./services/index.js";
 import { providerInstallationCoordinator } from "./services/ProviderInstallationCoordinator.js";
 import { NativePushService } from "./push/NativePushService.js";
+import { CodexProvider } from "./sdk/providers/codex.js";
 import { configureInboundWebSocketMessageLimit } from "./websocketLimits.js";
 import {
   type SpeechRegistryInitOptions,
@@ -218,6 +221,9 @@ let providerSessionWatchersForShutdown: ProviderSessionWatcherRegistry | null =
   null;
 let attachmentStagingCleanupTimer: ReturnType<typeof setInterval> | null = null;
 let stopResourceSampling: (() => void) | null = null;
+let codexThreadMetadataForShutdown: ReturnType<
+  CodexProvider["createThreadMetadataMonitor"]
+> | null = null;
 let isShuttingDown = false;
 
 /**
@@ -236,6 +242,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
   // Shutdown is intentional on every platform, whether providers are aborted
   // locally or detached to the Linux host. Cleanup is not new task activity.
   stopNotificationsForShutdown?.();
+  await codexThreadMetadataForShutdown?.close();
+  codexThreadMetadataForShutdown = null;
 
   console.log(`[Shutdown] Received ${signal}, cleaning up...`);
 
@@ -567,6 +575,33 @@ const realSdk = config.useMockSdk ? undefined : new RealClaudeSDK();
 
 // Create the event bus and the eligibility-gated provider watcher owner.
 const eventBus = new EventBus();
+const codexThreadMetadata =
+  !config.useMockSdk &&
+  (config.enabledProviders.length === 0 ||
+    config.enabledProviders.some(
+      (provider) => provider === "codex" || provider === "codex-oss",
+    ))
+    ? new CodexProvider({
+        codexPath: config.codexCliPath,
+      }).createThreadMetadataMonitor()
+    : null;
+codexThreadMetadataForShutdown = codexThreadMetadata;
+codexThreadMetadata?.subscribe((update) => {
+  eventBus.emit({
+    type: "session-updated",
+    sessionId: update.threadId,
+    projectId: toUrlProjectId(canonicalizeProjectPath(update.cwd)),
+    title: update.title,
+    fullTitle: update.fullTitle,
+    timestamp: new Date().toISOString(),
+  });
+});
+void codexThreadMetadata?.start().catch((error) => {
+  console.warn(
+    "[CodexThreadMetadata] Native title synchronization unavailable:",
+    error instanceof Error ? error.message : String(error),
+  );
+});
 const providerSessionWatchers = new ProviderSessionWatcherRegistry({
   eventBus,
   activationDelayMs: PROVIDER_WATCH_ACTIVATION_DELAY_MS,
@@ -649,6 +684,7 @@ const sessionIndexService = new SessionIndexService({
   writeLockStaleMs: config.sessionIndexWriteLockStaleMs,
   summaryParseConcurrency: config.sessionIndexSummaryParseConcurrency,
   sessionDiscoveryIndexRegistry,
+  codexThreadTitleResolver: codexThreadMetadata ?? undefined,
   eventBus,
 });
 const pushService = new PushService({ dataDir: config.dataDir });
@@ -1171,6 +1207,7 @@ async function startServer() {
     sessionQueuePersistenceService,
     dirtyFileEditorService,
     sessionIndexService,
+    codexThreadTitleResolver: codexThreadMetadata ?? undefined,
     sessionDiscoveryIndexRegistry,
     projectScanCacheTtlMs: config.projectScanCacheTtlMs,
     sessionAutoArchiveDays: config.sessionAutoArchiveDays,

@@ -26,6 +26,7 @@ import {
   type CodexRolloutDiscoveryMetadata,
   readCodexRolloutMetadata,
 } from "../sessions/codex-discovery.js";
+import type { CodexThreadTitleResolver } from "../sdk/providers/codex-thread-metadata.js";
 import type { ISessionReader } from "../sessions/types.js";
 import type { SessionSummary } from "../supervisor/types.js";
 import {
@@ -260,6 +261,8 @@ export interface SessionIndexServiceOptions {
   warmupProgressLogIntervalMs?: number;
   /** Shared process owner for provider discovery shards. */
   sessionDiscoveryIndexRegistry?: SessionDiscoveryIndexRegistry;
+  /** Codex-native user titles that are stored outside rollout JSONL. */
+  codexThreadTitleResolver?: CodexThreadTitleResolver;
 }
 
 /**
@@ -325,6 +328,7 @@ export class SessionIndexService implements ISessionIndexService {
   };
   private unsubscribeEventBus: (() => void) | null = null;
   private eventBus: EventBus | null = null;
+  private codexThreadTitleResolver: CodexThreadTitleResolver | null = null;
 
   constructor(options: SessionIndexServiceOptions = {}) {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? ".";
@@ -353,6 +357,7 @@ export class SessionIndexService implements ISessionIndexService {
     this.sessionDiscoveryIndexRegistry =
       options.sessionDiscoveryIndexRegistry ??
       new SessionDiscoveryIndexRegistry();
+    this.codexThreadTitleResolver = options.codexThreadTitleResolver ?? null;
 
     if (options.eventBus) {
       this.eventBus = options.eventBus;
@@ -859,11 +864,15 @@ export class SessionIndexService implements ISessionIndexService {
     cached: CachedSessionSummary,
     projectId: UrlProjectId,
   ): SessionSummary {
+    const nativeTitle =
+      cached.provider === "codex" || cached.provider === "codex-oss"
+        ? this.codexThreadTitleResolver?.getTitleOverride(sessionId)
+        : null;
     return {
       id: sessionId,
       projectId,
-      title: cached.title,
-      fullTitle: cached.fullTitle,
+      title: nativeTitle?.title ?? cached.title,
+      fullTitle: nativeTitle?.fullTitle ?? cached.fullTitle,
       createdAt: cached.createdAt,
       updatedAt: cached.updatedAt,
       messageCount: cached.messageCount,
@@ -877,6 +886,20 @@ export class SessionIndexService implements ISessionIndexService {
       lastAgentText: cached.lastAgentText,
       asyncQuestions: cached.asyncQuestions,
     };
+  }
+
+  private applyCodexNativeTitle(summary: SessionSummary): SessionSummary {
+    if (summary.provider !== "codex" && summary.provider !== "codex-oss") {
+      return summary;
+    }
+    const title = this.codexThreadTitleResolver?.getTitleOverride(summary.id);
+    return title
+      ? {
+          ...summary,
+          title: title.title,
+          fullTitle: title.fullTitle,
+        }
+      : summary;
   }
 
   private toCachedSummary(
@@ -1154,7 +1177,9 @@ export class SessionIndexService implements ISessionIndexService {
         filePath: args.filePath,
         size: args.size,
         run: () =>
-          args.reader.getSessionSummary(args.sessionId, args.projectId),
+          args.reader.getSessionSummary(args.sessionId, args.projectId, {
+            deferNativeTitle: true,
+          }),
         resolve,
         reject,
       };
@@ -1594,7 +1619,7 @@ export class SessionIndexService implements ISessionIndexService {
               options?.activeAfterMs === undefined ||
               Date.parse(changed.summary.updatedAt) >= options.activeAfterMs
             ) {
-              summaries.push(changed.summary);
+              summaries.push(this.applyCodexNativeTitle(changed.summary));
             }
             continue;
           }
@@ -1704,7 +1729,7 @@ export class SessionIndexService implements ISessionIndexService {
             options?.activeAfterMs === undefined ||
             Date.parse(summary.updatedAt) >= options.activeAfterMs
           ) {
-            summaries.push(summary);
+            summaries.push(this.applyCodexNativeTitle(summary));
           }
           index.sessions[sessionId] = this.toCachedSummary(
             summary,
@@ -2098,11 +2123,13 @@ export class SessionIndexService implements ISessionIndexService {
         });
         continue;
       }
+      const summary = this.toSessionSummary(sessionId, cached, projectId);
       this.eventBus.emit({
         type: "session-updated",
         sessionId,
         projectId,
-        title: cached.title,
+        title: summary.title,
+        fullTitle: summary.fullTitle,
         messageCount: cached.messageCount,
         updatedAt: cached.updatedAt,
         contextUsage: cached.contextUsage,
@@ -2212,7 +2239,7 @@ export class SessionIndexService implements ISessionIndexService {
             reader,
             observedDirtyRevision,
           );
-          return summary;
+          return this.applyCodexNativeTitle(summary);
         }
       } catch {
         // Fall through to clear any stale indexed entry below.
@@ -2270,7 +2297,7 @@ export class SessionIndexService implements ISessionIndexService {
           observedDirtyRevision,
         );
         await this.saveIndex(sessionDir, reader);
-        return summary;
+        return this.applyCodexNativeTitle(summary);
       }
 
       index.sessions[sessionId] = this.toEmptyCachedSummary(mtime, size);

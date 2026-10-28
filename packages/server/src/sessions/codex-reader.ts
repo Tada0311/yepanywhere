@@ -32,6 +32,7 @@ import {
   truncateSessionTitle,
 } from "@yep-anywhere/shared";
 import type { SessionDiscoveryIndex } from "../indexes/SessionDiscoveryIndex.js";
+import type { CodexThreadTitleResolver } from "../sdk/providers/codex-thread-metadata.js";
 import { getForkedSessionFile } from "./fork-discovery.js";
 import type { SourceVersionedSingleFlightStats } from "../lib/sourceVersionedSingleFlight.js";
 import { getLogger } from "../logging/logger.js";
@@ -136,6 +137,8 @@ export interface CodexSessionReaderOptions {
   summaryParserClient?: SummaryParserClient;
   /** Retention budget for parsed transcripts; process-wide by default. */
   entryCacheBudget?: CodexEntryCacheBudget;
+  /** Codex-native user title, which is not persisted in rollout JSONL. */
+  titleResolver?: CodexThreadTitleResolver;
 }
 
 interface CodexSessionFile {
@@ -602,6 +605,7 @@ export class CodexSessionReader implements ISessionReader {
   private slowLogThresholdMs: number;
   private summaryParserWorkerMode: SummaryParserWorkerMode;
   private summaryParserClient?: SummaryParserClient;
+  private titleResolver?: CodexThreadTitleResolver;
   private lastScanMetrics: CodexSessionReaderScanMetrics | null = null;
   private lastSummaryStreamMetrics: CodexSummaryStreamMetrics | null = null;
   private lastProviderChildProjectionMetrics: CodexProviderChildProjectionMetrics | null =
@@ -636,6 +640,7 @@ export class CodexSessionReader implements ISessionReader {
     );
     this.summaryParserWorkerMode = options.summaryParserWorkerMode ?? "off";
     this.summaryParserClient = options.summaryParserClient;
+    this.titleResolver = options.titleResolver;
     this.entryCacheBudget = options.entryCacheBudget ?? codexEntryCacheBudget;
     this.rolloutWindowReader = new CodexRolloutWindowReader(
       (filePath, start, length) => this.readFileRange(filePath, start, length),
@@ -750,6 +755,19 @@ export class CodexSessionReader implements ISessionReader {
     projectId: UrlProjectId,
     options?: GetSessionSummaryOptions,
   ): Promise<SessionSummary | null> {
+    const summary = await this.getSessionSummaryWithoutNativeTitle(
+      sessionId,
+      projectId,
+      options,
+    );
+    return options?.deferNativeTitle ? summary : this.applyNativeTitle(summary);
+  }
+
+  private async getSessionSummaryWithoutNativeTitle(
+    sessionId: string,
+    projectId: UrlProjectId,
+    options?: GetSessionSummaryOptions,
+  ): Promise<SessionSummary | null> {
     const sessionFile = await this.findSessionFile(sessionId);
     if (!sessionFile) return null;
 
@@ -829,14 +847,17 @@ export class CodexSessionReader implements ISessionReader {
     options?: { deferAsyncQuestions?: boolean },
   ): Promise<SessionListSummary | null> {
     if (summaryHint && options?.deferAsyncQuestions) {
-      return toSessionListSummary(summaryHint);
+      return toSessionListSummary(
+        this.applyNativeTitle(summaryHint) ?? summaryHint,
+      );
     }
     if (summaryHint) {
       const sessionFile = await this.findSessionFile(sessionId);
       if (!sessionFile) return null;
       try {
+        const titledSummary = this.applyNativeTitle(summaryHint) ?? summaryHint;
         return {
-          ...toSessionListSummary(summaryHint),
+          ...toSessionListSummary(titledSummary),
           asyncQuestions: await readCodexAsyncQuestions(sessionFile.filePath),
         };
       } catch {
@@ -978,14 +999,16 @@ export class CodexSessionReader implements ISessionReader {
             transcriptSnapshotUpdatedAt,
           );
       if (!summary) return null;
+      const titledSummary = this.applyNativeTitle(summary);
+      if (!titledSummary) return null;
 
       const provider = compactWindow
-        ? summary.provider === "codex-oss"
+        ? titledSummary.provider === "codex-oss"
           ? "codex-oss"
           : "codex"
         : this.determineProviderFromEntries(entries);
       return {
-        summary,
+        summary: titledSummary,
         transcriptSnapshotUpdatedAt,
         ...(compactWindow
           ? {
@@ -1046,7 +1069,10 @@ export class CodexSessionReader implements ISessionReader {
         return null;
       }
 
-      const summary = await this.getSessionSummary(sessionId, projectId);
+      const summary = await this.getSessionSummaryWithoutNativeTitle(
+        sessionId,
+        projectId,
+      );
       if (!summary) return null;
 
       return { summary, mtime, size };
@@ -2307,12 +2333,27 @@ export class CodexSessionReader implements ISessionReader {
     filePath: string,
     options?: GetSessionSummaryOptions,
   ): Promise<SessionSummary | null> {
-    return this.buildSessionSummaryFromStream(
+    const summary = await this.buildSessionSummaryFromStream(
       sessionId,
       projectId,
       filePath,
       options,
     );
+    return this.applyNativeTitle(summary);
+  }
+
+  private applyNativeTitle<
+    T extends { id: string; title: string | null; fullTitle: string | null },
+  >(summary: T | null): T | null {
+    if (!summary) return null;
+    const title = this.titleResolver?.getTitleOverride(summary.id);
+    return title
+      ? {
+          ...summary,
+          title: title.title,
+          fullTitle: title.fullTitle,
+        }
+      : summary;
   }
 
   private async buildSessionSummaryFromStream(

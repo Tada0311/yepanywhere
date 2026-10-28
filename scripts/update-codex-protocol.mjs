@@ -47,6 +47,10 @@ const SUBSET_EXPORTS = [
   { name: "ThreadStartParams", file: "v2/ThreadStartParams.ts" },
   { name: "ThreadResumeParams", file: "v2/ThreadResumeParams.ts" },
   { name: "ThreadReadParams", file: "v2/ThreadReadParams.ts" },
+  { name: "ThreadListParams", file: "v2/ThreadListParams.ts" },
+  { name: "ThreadSortKey", file: "v2/ThreadSortKey.ts" },
+  { name: "ThreadSourceKind", file: "v2/ThreadSourceKind.ts" },
+  { name: "Thread", file: "v2/Thread.ts" },
   { name: "ThreadForkParams", file: "v2/ThreadForkParams.ts" },
   { name: "ThreadRevertParams", file: "v2/ThreadRevertParams.ts" },
   { name: "TurnStartParams", file: "v2/TurnStartParams.ts" },
@@ -63,11 +67,16 @@ const SUBSET_EXPORTS = [
   { name: "ThreadStartResponse", file: "v2/ThreadStartResponse.ts" },
   { name: "ThreadResumeResponse", file: "v2/ThreadResumeResponse.ts" },
   { name: "ThreadReadResponse", file: "v2/ThreadReadResponse.ts" },
+  { name: "ThreadListResponse", file: "v2/ThreadListResponse.ts" },
   { name: "ThreadForkResponse", file: "v2/ThreadForkResponse.ts" },
   { name: "ThreadRevertResponse", file: "v2/ThreadRevertResponse.ts" },
   {
     name: "ThreadRevertedNotification",
     file: "v2/ThreadRevertedNotification.ts",
+  },
+  {
+    name: "ThreadNameUpdatedNotification",
+    file: "v2/ThreadNameUpdatedNotification.ts",
   },
   { name: "TurnStartResponse", file: "v2/TurnStartResponse.ts" },
   {

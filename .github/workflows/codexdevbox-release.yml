@@ -77,6 +77,9 @@ jobs:
           pnpm --filter @yep-anywhere/server exec vitest run
           test/services/SessionCatalogService.test.ts
           test/sdk/providers/codex.test.ts
+          test/sdk/providers/codex-thread-metadata.test.ts
+          test/indexes/SessionIndexService.test.ts
+          test/routes/recents.test.ts
           test/sessions/codex-reader-oss.test.ts
           test/supervisor/sessionActivationCoordinator.test.ts
           test/supervisor.test.ts

@@ -922,6 +922,7 @@ describe("useSession completion reconciliation", () => {
         sessionId: "sess-1",
         projectId: PROJECT_ID,
         title: "Renamed session",
+        fullTitle: "Renamed session from Codex App",
         messageCount: 42,
         updatedAt: "2026-07-01T12:30:00.000Z",
         contextUsage: { inputTokens: 1200, percentage: 24 },
@@ -942,6 +943,7 @@ describe("useSession completion reconciliation", () => {
       }),
     ).toMatchObject({
       title: "Renamed session",
+      fullTitle: "Renamed session from Codex App",
       messageCount: 42,
       updatedAt: "2026-07-01T12:30:00.000Z",
       contextUsage: { inputTokens: 1200, percentage: 24 },

@@ -118,6 +118,12 @@ export interface GetSessionSummaryOptions {
   /** Collection discovery may defer the independent question-tail projection. */
   deferAsyncQuestions?: boolean;
   /**
+   * Persist only transcript-derived facts. Presentation layers apply provider
+   * title overlays after a cache boundary so clearing an external title can
+   * restore the transcript title without reparsing.
+   */
+  deferNativeTitle?: boolean;
+  /**
    * `head` permits a provider to stop after stable head metadata. It preserves
    * the SessionSummary wire shape but may omit tail-derived optional fields
    * such as contextUsage and may use a minimal compatible messageCount.

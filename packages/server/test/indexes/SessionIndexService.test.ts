@@ -179,6 +179,98 @@ describe("SessionIndexService", () => {
       expect(getSessionSummary).toHaveBeenCalledTimes(1);
     });
 
+    it("overlays Codex-native names without persisting them into the index", async () => {
+      const sessionId = "codex-thread";
+      const filePath = join(sessionDir, `${sessionId}.jsonl`);
+      await writeFile(filePath, "{}\n");
+      const summary: SessionSummary = {
+        id: sessionId,
+        projectId,
+        title: "Original rollout title",
+        fullTitle: "Original rollout title",
+        createdAt: "2026-10-20T00:00:00.000Z",
+        updatedAt: "2026-10-20T00:00:00.000Z",
+        messageCount: 2,
+        ownership: { owner: "none" },
+        provider: "codex",
+      };
+      const codexReader = {
+        getSessionFilePath: vi.fn(async () => filePath),
+        getSessionSummary: vi.fn(async () => summary),
+      } as unknown as ISessionReader;
+      let nativeTitle: {
+        title: string;
+        fullTitle: string;
+      } | null = {
+        title: "Codex App rename",
+        fullTitle: "Codex App rename",
+      };
+      const titleResolver = {
+        getTitleOverride: vi.fn(() => nativeTitle),
+      };
+      const codexService = new SessionIndexService({
+        dataDir,
+        projectsDir,
+        codexThreadTitleResolver: titleResolver,
+      });
+      await codexService.initialize();
+
+      const first = await codexService.getSessionSummaryWithCache(
+        sessionDir,
+        projectId,
+        sessionId,
+        codexReader,
+      );
+      const cached = await codexService.getSessionSummaryWithCache(
+        sessionDir,
+        projectId,
+        sessionId,
+        codexReader,
+      );
+      const cachedOnly = await codexService.getCachedSessionSummary(
+        sessionDir,
+        projectId,
+        sessionId,
+        codexReader,
+      );
+
+      expect(first?.title).toBe("Codex App rename");
+      expect(cached?.title).toBe("Codex App rename");
+      expect(cached?.fullTitle).toBe("Codex App rename");
+      expect(cachedOnly?.title).toBe("Codex App rename");
+      expect(codexReader.getSessionSummary).toHaveBeenCalledTimes(1);
+      expect(codexReader.getSessionSummary).toHaveBeenCalledWith(
+        sessionId,
+        projectId,
+        { deferNativeTitle: true },
+      );
+      expect(titleResolver.getTitleOverride).toHaveBeenCalled();
+
+      nativeTitle = null;
+      const cleared = await codexService.getSessionSummaryWithCache(
+        sessionDir,
+        projectId,
+        sessionId,
+        codexReader,
+      );
+      const restartedService = new SessionIndexService({
+        dataDir,
+        projectsDir,
+        codexThreadTitleResolver: titleResolver,
+      });
+      await restartedService.initialize();
+      const afterRestart = await restartedService.getSessionSummaryWithCache(
+        sessionDir,
+        projectId,
+        sessionId,
+        codexReader,
+      );
+
+      expect(cleared?.title).toBe("Original rollout title");
+      expect(afterRestart?.fullTitle).toBe("Original rollout title");
+      expect(codexReader.getSessionSummary).toHaveBeenCalledTimes(1);
+    });
+
     it("returns an indexed prefix summary when the file only grew", async () => {
       await createSession("session-1", "Hello world");
       const getSessionSummary = vi.spyOn(reader, "getSessionSummary");

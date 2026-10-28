@@ -129,6 +129,50 @@ describe("Recents Routes", () => {
     expect(recents[0]).not.toHaveProperty("title");
   });
 
+  it("overlays the current Codex thread title on retained catalog rows", async () => {
+    const routes = createRecentsRoutes({
+      recentsService: {
+        getRecentsWithLimit: () => [
+          {
+            sessionId: "codex-thread",
+            projectId: "proj-1",
+            visitedAt: "2026-01-01T00:00:00Z",
+          },
+        ],
+      } as unknown as RecentsService,
+      scanner: {} as ProjectScanner,
+      readerFactory: vi.fn(),
+      codexThreadTitleResolver: {
+        getTitleOverride: (threadId) =>
+          threadId === "codex-thread"
+            ? { title: "Stale catalog title", fullTitle: "Current Codex title" }
+            : null,
+      },
+      retainedCollections: {
+        read: async () => ({
+          rows: [
+            {
+              sessionId: "codex-thread",
+              projectId: "proj-1",
+              projectPath: "/work",
+              catalogFamily: "codex",
+              title: "Stale catalog title",
+            },
+          ],
+          catalog: {
+            catalogEpoch: "one",
+            catalogGeneration: 1,
+            complete: true,
+            refreshing: false,
+          },
+        }),
+      } as unknown as RetainedSessionCollections,
+    });
+    const response = await routes.request("/?summaryMode=retained");
+    const { recents } = await response.json();
+    expect(recents[0].title).toBe("Current Codex title");
+  });
+
   it("resolves recent sessions across providers for mixed-provider projects", async () => {
     const project = createProject();
     const summary = createSummary();

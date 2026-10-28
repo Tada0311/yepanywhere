@@ -6637,6 +6637,7 @@ export class Supervisor {
       sessionId,
       projectId,
       title: summary.title,
+      fullTitle: summary.fullTitle,
       messageCount: summary.messageCount,
       updatedAt: summary.updatedAt,
       contextUsage: summary.contextUsage,

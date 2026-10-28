@@ -133,6 +133,21 @@ it("omits the new parameter for older servers", async () => {
   expect(hook.result.current.recentSessions).toEqual([entry]);
 });
 
+it("revalidates when a session title is updated", async () => {
+  mocks.fetchA.mockResolvedValue({ recents: [entry], catalog });
+  const hook = renderHook(() => useRecentSessions());
+  await settle();
+  expect(mocks.fetchA).toHaveBeenCalledTimes(1);
+
+  const renamed = { ...entry, title: "Renamed title" };
+  mocks.fetchA.mockResolvedValue({ recents: [renamed], catalog });
+  act(() => update("session-updated"));
+  await settle(500);
+
+  expect(mocks.fetchA).toHaveBeenCalledTimes(2);
+  expect(hook.result.current.recentSessions[0]?.title).toBe("Renamed title");
+});
+
 it("preserves known titles and membership across incomplete catalog reads", async () => {
   mocks.fetchA.mockResolvedValue({ recents: [entry], catalog });
   const hook = renderHook(() => useRecentSessions());

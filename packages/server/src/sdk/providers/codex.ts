@@ -172,6 +172,11 @@ import {
   normalizeCodexModelList,
   normalizeSemver,
 } from "./codex-model-catalog.js";
+import {
+  CodexThreadMetadataMonitor,
+  type CodexThreadMetadataConnection,
+  type CodexThreadMetadataMonitorOptions,
+} from "./codex-thread-metadata.js";
 import { normalizeCodexSubscriptionUsage } from "./provider-subscription-usage.js";
 import {
   fallbackModelCatalog,
@@ -1463,6 +1468,34 @@ export class CodexProvider implements AgentProvider {
     this.config.codexPath = codexPath;
     this.modelCache = null;
     this.modelCacheReadGeneration += 1;
+  }
+
+  createThreadMetadataMonitor(
+    options: Pick<
+      CodexThreadMetadataMonitorOptions,
+      "pageSize" | "maxPages" | "maxEntries" | "maxPendingReads"
+    > = {},
+  ): CodexThreadMetadataMonitor {
+    return new CodexThreadMetadataMonitor({
+      ...options,
+      connectionFactory: async () => {
+        const appServer = new CodexAppServerClient(
+          await this.resolveCodexCommand(),
+          homedir(),
+          this.getCodexEnv(),
+        );
+        return {
+          connect: () => appServer.connect(),
+          request: <T>(method: string, params?: unknown) =>
+            appServer.request<T>(method, params),
+          notify: (method, params) => appServer.notify(method, params),
+          setNotificationObserver: (observer) =>
+            appServer.setNotificationObserver(observer),
+          nextNotification: () => appServer.nextNotification(),
+          close: () => appServer.close(),
+        } satisfies CodexThreadMetadataConnection;
+      },
+    });
   }
 
   setMcpAppViewsGetter(getter: () => boolean): void {

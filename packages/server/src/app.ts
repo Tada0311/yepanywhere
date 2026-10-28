@@ -318,6 +318,7 @@ import type {
   CodexPlanToolMode,
 } from "@yep-anywhere/shared";
 import type { AgentProvider } from "./sdk/providers/types.js";
+import type { CodexThreadTitleResolver } from "./sdk/providers/codex-thread-metadata.js";
 import type {
   ClaudeSDK,
   PermissionMode,
@@ -458,6 +459,8 @@ export interface AppOptions {
   claudeSummaryParserWorkerMode?: SummaryParserWorkerMode;
   /** Codex summary parser child-process mode. Default on when unset. */
   codexSummaryParserWorkerMode?: SummaryParserWorkerMode;
+  /** Codex-native names used to override rollout-derived titles. */
+  codexThreadTitleResolver?: CodexThreadTitleResolver;
   /** Project scanner cache TTL in ms (0 = rescan every request). */
   projectScanCacheTtlMs?: number;
   /** Sessions older than this many days are hidden from default scans. 0 disables. */
@@ -1649,6 +1652,7 @@ export function createApp(options: AppOptions): AppResult {
               sessionsDir: project.sessionDir,
               projectPath: project.path,
               summaryParserWorkerMode: options.codexSummaryParserWorkerMode,
+              titleResolver: options.codexThreadTitleResolver,
               ...(discoveryIndex ? { discoveryIndex } : {}),
             });
             if (sandboxSessionRoots.length === 0) {
@@ -1662,6 +1666,7 @@ export function createApp(options: AppOptions): AppResult {
                     projectPath,
                     summaryParserWorkerMode:
                       options.codexSummaryParserWorkerMode,
+                    titleResolver: options.codexThreadTitleResolver,
                   }),
               ),
               globalReader,
@@ -1678,6 +1683,7 @@ export function createApp(options: AppOptions): AppResult {
               sessionsDir: project.sessionDir,
               projectPath: project.path,
               summaryParserWorkerMode: options.codexSummaryParserWorkerMode,
+              titleResolver: options.codexThreadTitleResolver,
               ...(discoveryIndex ? { discoveryIndex } : {}),
             });
           },
@@ -1760,6 +1766,7 @@ export function createApp(options: AppOptions): AppResult {
           sessionsDir: codexSessionsDir,
           projectPath,
           summaryParserWorkerMode: options.codexSummaryParserWorkerMode,
+          titleResolver: options.codexThreadTitleResolver,
           ...(discoveryIndex ? { discoveryIndex } : {}),
         });
       },
@@ -3407,6 +3414,7 @@ export function createApp(options: AppOptions): AppResult {
         codexScanner,
         codexSessionsDir,
         codexReaderFactory,
+        codexThreadTitleResolver: options.codexThreadTitleResolver,
         geminiScanner,
         geminiSessionsDir,
         geminiReaderFactory,

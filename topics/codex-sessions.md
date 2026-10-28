@@ -214,6 +214,42 @@ head metadata for observed rollout files under
 for replacement detection. These layers reduce duplicate reads, but only
 provider-owned files are authoritative.
 
+### Native thread title synchronization
+
+Codex App persists a user-visible thread rename in its state database
+(`Thread.name`), not in the rollout JSONL. Re-parsing the rollout therefore
+cannot discover that rename, and calling `thread/resume` merely to read
+metadata can collide with the active Codex App writer.
+
+`CodexThreadMetadataMonitor` owns one read-only app-server connection and
+maintains a bounded `threadId -> native name` overlay:
+
+- initialization uses paginated `thread/list` requests with
+  `useStateDbOnly: true` for both active and archived threads;
+- `thread/name/updated` applies live renames;
+- an unknown renamed thread is hydrated with
+  `thread/read { includeTurns: false }`;
+- the connection never calls `thread/resume`, `thread/start`, or `turn/start`.
+
+The overlay is applied at both `CodexSessionReader` and
+`SessionIndexService` return boundaries, so a persisted cache hit cannot keep
+an old rollout title. Index persistence reads explicitly defer the native
+overlay, so clearing a name restores the transcript-derived title even without
+reparsing. A non-empty native name supplies both `title` and `fullTitle`;
+clearing the name removes the overlay and restores the rollout-derived title.
+The overlay never populates YA `customTitle`, which continues to mean a
+YA-owned user override and retains precedence.
+
+Live title changes emit `session-updated` with project identity derived from
+the thread cwd. Browser summaries and an open session apply both title fields
+without an additional API request. Startup state needs no polling: the monitor
+hydrates once and then relies on app-server notifications. If the metadata
+app-server connection exits, the monitor reconnects with exponential backoff
+and refreshes the complete active/archived snapshot, including titles cleared
+while it was disconnected. Name clearing is covered by monitor unit tests; the
+current Codex app-server rejects an empty rename request, so clearing is not
+part of the live acceptance path.
+
 ### Detail entry-cache concurrency
 
 `CodexSessionReader` may retain parsed detail entries for a rollout and extend

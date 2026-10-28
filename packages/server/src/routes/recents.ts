@@ -17,6 +17,7 @@ import type { SessionMetadataService } from "../metadata/SessionMetadataService.
 import type { RetainedSessionCollections } from "../services/RetainedSessionCollections.js";
 import type { SessionCatalogRow } from "../sessions/catalog-types.js";
 import type { CodexSessionReader } from "../sessions/codex-reader.js";
+import type { CodexThreadTitleResolver } from "../sdk/providers/codex-thread-metadata.js";
 import type { GeminiSessionReader } from "../sessions/gemini-reader.js";
 import { findSessionListSummaryAcrossProviders } from "../sessions/provider-resolution.js";
 import type { GrokSessionReader } from "../sessions/grok-reader.js";
@@ -35,6 +36,7 @@ export interface RecentsDeps {
   codexScanner?: CodexSessionScanner;
   codexSessionsDir?: string;
   codexReaderFactory?: (projectPath: string) => CodexSessionReader;
+  codexThreadTitleResolver?: CodexThreadTitleResolver;
   geminiScanner?: GeminiSessionScanner;
   geminiSessionsDir?: string;
   geminiReaderFactory?: (projectPath: string) => GeminiSessionReader;
@@ -90,6 +92,10 @@ export function createRecentsRoutes(deps: RecentsDeps) {
           row.sessionId,
         );
         const projectId = metadata?.workingProjectId ?? row.projectId;
+        const codexTitle = deps.codexThreadTitleResolver?.getTitleOverride(
+          row.sessionId,
+        )?.fullTitle;
+        const title = codexTitle ?? row.title;
         visits.push({ ...entry, projectId });
         enriched.push({
           ...entry,
@@ -100,10 +106,9 @@ export function createRecentsRoutes(deps: RecentsDeps) {
               : decodeProjectId(projectId),
           ),
           provider: metadata?.provider ?? row.provider ?? row.catalogFamily,
-          ...(row.title !== undefined
+          ...(title !== undefined
             ? {
-                title:
-                  row.title === null ? null : truncateSessionTitle(row.title),
+                title: title === null ? null : truncateSessionTitle(title),
               }
             : {}),
         });

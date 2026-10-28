@@ -486,6 +486,7 @@ describe("ExternalSessionTracker", () => {
         sessionId,
         projectId,
         title: "Codex title",
+        fullTitle: "Codex title",
         updatedAt: "2026-07-04T00:00:01.000Z",
       });
       expect(update).not.toHaveProperty("messageCount");
@@ -589,6 +590,7 @@ describe("ExternalSessionTracker", () => {
         sessionId,
         projectId,
         title: "External Codex title",
+        fullTitle: "External Codex title",
         updatedAt: "2026-07-04T00:00:01.000Z",
       });
       expect(update).not.toHaveProperty("messageCount");

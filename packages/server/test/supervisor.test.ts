@@ -7614,6 +7614,7 @@ describe("Supervisor", () => {
         );
         expect(updated).toBeDefined();
         expect(updated?.title).toBe("Reconciled title");
+        expect(updated?.fullTitle).toBe("Reconciled title");
         expect(updated?.messageCount).toBe(1);
       } finally {
         vi.useRealTimers();

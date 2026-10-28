@@ -2185,6 +2185,7 @@ export function applySessionCollectionUpdated(
     getRecord(state, event.sessionId),
     {
       title: event.title,
+      fullTitle: event.fullTitle,
       updatedAt: event.updatedAt,
       messageCount: event.messageCount,
       model: event.model,

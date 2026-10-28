@@ -1653,6 +1653,9 @@ export function useSession(
         return {
           ...prev,
           ...(event.title !== undefined && { title: event.title }),
+          ...(event.fullTitle !== undefined && {
+            fullTitle: event.fullTitle,
+          }),
           ...(event.messageCount !== undefined && {
             messageCount: event.messageCount,
           }),

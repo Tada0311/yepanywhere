@@ -340,12 +340,17 @@ describe("clientSummaryState", () => {
         timestamp: RECENT,
         updatedAt: RECENT,
         title: "New title",
+        fullTitle: "Complete native title",
       },
       200,
     );
     expect(
       selectSessionCollectionRecord(state, "session")?.asyncQuestions,
     ).toEqual(asyncQuestions);
+    expect(selectSessionCollectionRecord(state, "session")).toMatchObject({
+      title: "New title",
+      fullTitle: "Complete native title",
+    });
     state = applySessionCollectionUpdated(
       state,
       {

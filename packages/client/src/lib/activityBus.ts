@@ -160,6 +160,8 @@ export interface SessionUpdatedEvent {
   projectId: UrlProjectId;
   /** New title (derived from first user message) */
   title?: string | null;
+  /** Complete provider-native title for hover/detail surfaces. */
+  fullTitle?: string | null;
   /** New message count */
   messageCount?: number;
   /** Updated timestamp */

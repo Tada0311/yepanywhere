@@ -138,6 +138,7 @@ export class ExternalSessionTracker {
     string,
     {
       title: string | null;
+      fullTitle: string | null;
       updatedAt: string;
       messageCount?: number;
       projectId: UrlProjectId;
@@ -174,6 +175,7 @@ export class ExternalSessionTracker {
         const nextState = {
           ...cached,
           title: summary.title,
+          fullTitle: summary.fullTitle,
           updatedAt: summary.updatedAt,
           asyncQuestions: summary.asyncQuestions ?? cached?.asyncQuestions,
           projectId,
@@ -209,6 +211,7 @@ export class ExternalSessionTracker {
               sessionId,
               projectId,
               title: summary.title,
+              fullTitle: summary.fullTitle,
               updatedAt: summary.updatedAt,
               asyncQuestions: summary.asyncQuestions,
               ...(isComplete
@@ -250,6 +253,7 @@ export class ExternalSessionTracker {
         } else {
           // Existing session - check for changes and emit session-updated
           const titleChanged = cached?.title !== summary.title;
+          const fullTitleChanged = cached?.fullTitle !== summary.fullTitle;
           const updatedAtChanged = cached?.updatedAt !== summary.updatedAt;
           const messageCountChanged =
             isComplete &&
@@ -264,6 +268,7 @@ export class ExternalSessionTracker {
 
           if (
             titleChanged ||
+            fullTitleChanged ||
             updatedAtChanged ||
             messageCountChanged ||
             contextUsageChanged ||
@@ -277,6 +282,7 @@ export class ExternalSessionTracker {
               sessionId,
               projectId,
               title: summary.title,
+              fullTitle: summary.fullTitle,
               updatedAt: summary.updatedAt,
               asyncQuestions: summary.asyncQuestions,
               ...(isComplete
